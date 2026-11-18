@@ -181,3 +181,129 @@ else:
 st.write(f"On students it has never seen, the best model ({best_model_name}) is off by about {best_model_mae:.2f} marks on average.")
 # Remind the user that predictions should support teachers rather than decide outcomes.
 st.caption("Predictions are estimates to support teachers, not decisions about students.")
+
+# ---------- Model training: Linear Regression only ----------
+
+# Import the function that splits the data into a learning part and a testing part
+from sklearn.model_selection import train_test_split
+
+# Import the Linear Regression model
+from sklearn.linear_model import LinearRegression
+
+# Import the three measurements used to judge the model
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+# X = every column except the score (the inputs the model learns from)
+X = clean_df.drop(columns=[target])
+
+# y = only the score column (the thing we want to predict)
+y = clean_df[target]
+
+# Keep 20 percent of students hidden for testing; random_state=42 makes the split repeatable
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Create an empty Linear Regression model
+model = LinearRegression()
+
+# Train it on the 80 percent learning students
+model.fit(X_train, y_train)
+
+# Predict scores for the 20 percent test students the model has never seen
+test_predictions = model.predict(X_test)
+
+# MAE: the average size of the mistake, in marks
+mae = mean_absolute_error(y_test, test_predictions)
+
+# RMSE: like MAE, but big mistakes count more
+rmse = mean_squared_error(y_test, test_predictions) ** 0.5
+
+# R2: how much of the differences between students the model explains (1.0 is perfect)
+r2 = r2_score(y_test, test_predictions)
+
+# Show a heading for the accuracy section
+st.subheader("Model accuracy")
+
+# Make three side-by-side boxes
+c1, c2, c3 = st.columns(3)
+
+# Put one number in each box
+c1.metric("Average error (MAE)", round(mae, 2))
+c2.metric("RMSE", round(rmse, 2))
+c3.metric("R2", round(r2, 2))
+
+# Explain the result in plain language
+st.write(f"On students it has never seen, the model is off by about {mae:.2f} marks on average.")
+
+# Remind everyone that these are estimates
+st.caption("Predictions are estimates to support teachers, not decisions about students.")
+
+
+# ---------- Predict a new student ----------
+
+# Show a heading for this section
+st.subheader("Predict a new student")
+
+# The boxes to show: every original column except the score and any name/ID columns we dropped
+input_cols = [c for c in df.columns if c != target and c not in dropped_cols]
+
+# Which of those boxes hold words (not numbers)
+text_input_cols = [c for c in input_cols if not pd.api.types.is_numeric_dtype(df[c])]
+
+# A form waits until the button is pressed before doing anything
+with st.form("predict_form"):
+    # An empty dictionary to collect the answers: column name -> what the person chose
+    answers = {}
+
+    # Split the form into 3 side-by-side columns so it is not too long
+    form_cols = st.columns(3)
+
+    # Go through every input column; i counts 0, 1, 2, 3 ...
+    for i, col in enumerate(input_cols):
+        # i % 3 gives 0, 1, 2, 0, 1, 2 ..., so the boxes spread across the 3 columns
+        with form_cols[i % 3]:
+            if col in text_input_cols:
+                # Text column: list the words that appear in the data, in alphabetical order
+                options = sorted(df[col].dropna().unique().tolist())
+                # Start the dropdown on the most common word
+                default_index = options.index(df[col].mode()[0])
+                # Show the dropdown and store the chosen word
+                answers[col] = st.selectbox(col, options, index=default_index)
+            elif pd.api.types.is_integer_dtype(df[col]):
+                # Whole-number column: limited to the smallest and largest value in the data
+                answers[col] = st.number_input(col, min_value=int(df[col].min()), max_value=int(df[col].max()), value=int(df[col].median()))
+            else:
+                # Decimal column: same idea, but with decimals
+                answers[col] = st.number_input(col, min_value=float(df[col].min()), max_value=float(df[col].max()), value=float(df[col].median()))
+
+    # The button that sends the form; submitted becomes True when it is pressed
+    submitted = st.form_submit_button("Predict score")
+
+# Only run the prediction after the button has been pressed
+if submitted:
+    # Turn the answers into a one-row table
+    new_row = pd.DataFrame([answers])
+
+    # Put the new student under all the original students (without their scores)
+    combined = pd.concat([df[input_cols], new_row], ignore_index=True)
+
+    # Convert words to 0/1 columns the same way as in training
+    combined = pd.get_dummies(combined, columns=text_input_cols, drop_first=True, dtype=int)
+
+    # Keep only the new student's row, with the exact columns and order the model expects
+    new_X = combined.tail(1).reindex(columns=X.columns, fill_value=0)
+
+    # Ask the model for a score
+    prediction = float(model.predict(new_X)[0])
+
+    # A score cannot be below 0
+    prediction = max(prediction, 0)
+
+    # If the school's scores never go above 100, a prediction cannot go above 100 either
+    if y.max() <= 100:
+        prediction = min(prediction, 100)
+
+    # Show the predicted score in big text
+    st.metric("Predicted score", round(prediction, 1))
+
+    # Explain how reliable it is
+    st.write(f"On students it has never seen, the model is off by about {mae:.2f} marks on average.")
